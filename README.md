@@ -19,7 +19,7 @@ docker-compose up
 curl -X GET "http://localhost:8080/users/getReview?user_id=u1"
 ```
 
-##Остановка приложения
+### Остановка приложения
 ```bash
 docker-compose down
 ```
