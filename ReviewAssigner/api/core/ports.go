@@ -11,7 +11,7 @@ type Assigner interface {
 	IsActive(context.Context, string, bool) (User, error)
 	CreatePR(context.Context, PullRequest) (PullRequest, error)
 	Merged(context.Context, string) (PullRequest, error)
-	Reassign(context.Context, ReassignReviewer, string) (ReassignReviewer, error)
+	Reassign(context.Context, ReassignReviewer) (PullRequest, string, error)
 	GetReview(context.Context, string) (UserPullRequest, error)
 }
 

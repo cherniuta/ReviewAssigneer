@@ -8,6 +8,7 @@ import (
 	"github.com/lib/pq"
 	"log/slog"
 	"review-assigner/core"
+	"strings"
 )
 
 type DB struct {
@@ -64,15 +65,15 @@ func (db *DB) AddTeam(ctx context.Context, team core.Team) error {
 
 	stmt, err := tx.Prepare("INSERT INTO teams (name) VALUES ($1)")
 	if err != nil {
-		if isUniqueConstraintError(err) {
-			return core.ErrTeamAlreadyExists
-		}
 		return err
 	}
 	defer stmt.Close()
 
 	_, err = stmt.ExecContext(ctx, team.TeamName)
 	if err != nil {
+		if strings.Contains(err.Error(), "23505") {
+			return core.ErrTeamAlreadyExists
+		}
 		return err
 	}
 
@@ -101,15 +102,17 @@ func (db *DB) AddPR(ctx context.Context, pullRequest core.PullRequest) error {
 		}
 	}()
 
-	prstmt, err := tx.Prepare("INSERT INTO pull_requests (id,title,author_id) VALUES ($1, $2,$3)")
+	prstmt, err := tx.Prepare("INSERT INTO pull_request (id,title,author_id,state) VALUES ($1, $2,$3,$4)")
 	if err != nil {
 		return err
 	}
 	defer prstmt.Close()
 
-	_, err = prstmt.ExecContext(ctx, pullRequest.PullRequestID, pullRequest.PullRequestName, pullRequest.AuthorID)
+	_, err = prstmt.ExecContext(ctx, pullRequest.PullRequestID, pullRequest.PullRequestName, pullRequest.AuthorID, "OPEN")
 	if err != nil {
-		return err
+		if strings.Contains(err.Error(), "23505") {
+			return core.ErrPRAAlreadyExists
+		}
 	}
 
 	reviewerStmt, err := tx.Prepare("INSERT INTO pr_reviewers (pr_id, reviewer_id) VALUES ($1, $2)")
@@ -140,7 +143,7 @@ func (db *DB) GetTeam(ctx context.Context, teamName string) (core.Team, error) {
 		return core.Team{}, err
 	}
 	if !exists {
-		return core.Team{}, fmt.Errorf("team %s not found", teamName)
+		return core.Team{}, core.ErrTeamNotFound
 	}
 	team.TeamName = teamName
 
@@ -178,9 +181,9 @@ func (db *DB) GetUser(ctx context.Context, userId string) (core.User, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return core.User{}, fmt.Errorf("user %s not found", userId)
+			return core.User{}, core.ErrUserNotFound
 		}
-		return core.User{}, fmt.Errorf("failed to get user: %w", err)
+		return core.User{}, err
 	}
 
 	return user, nil
@@ -199,7 +202,7 @@ func (db *DB) IsActive(ctx context.Context, userId string, status bool) (core.Us
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return core.User{}, fmt.Errorf("user %d not found", userId)
+			return core.User{}, core.ErrUserNotFound
 		}
 		return core.User{}, fmt.Errorf("failed to update user: %w", err)
 	}
@@ -212,7 +215,7 @@ func (db *DB) Merged(ctx context.Context, prId string) (core.PullRequest, error)
 
 	err := db.conn.QueryRowContext(
 		ctx,
-		`UPDATE pull_requests SET state = 'MERGED'
+		`UPDATE pull_request SET state = 'MERGED'
          WHERE id = $1 and state='OPEN'
          RETURNING id, title, author_id, state`,
 		prId,
@@ -239,14 +242,14 @@ func (db *DB) GetPRDetailsWithReviewers(ctx context.Context, prId string) (core.
 	err := db.conn.QueryRowContext(
 		ctx,
 		`SELECT id, title, author_id, state 
-         FROM pull_requests 
+         FROM pull_request
          WHERE id = $1`,
 		prId,
 	).Scan(&pullRequest.PullRequestID, &pullRequest.PullRequestName, &pullRequest.AuthorID, &pullRequest.Status)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return core.PullRequest{}, fmt.Errorf("pr %s not found", prId)
+			return core.PullRequest{}, core.ErrPRNotFound
 		}
 		return core.PullRequest{}, fmt.Errorf("failed to get pr: %w", err)
 	}
@@ -290,15 +293,19 @@ func (db *DB) getReviewers(ctx context.Context, prId string) ([]string, error) {
 
 func (db *DB) Reassign(ctx context.Context, oldReviewer core.ReassignReviewer, newReviewer string) error {
 
-	_, err := db.conn.ExecContext(
+	result, err := db.conn.ExecContext(
 		ctx,
-		`UPDATE  pr_reviewers SET reviewer_id = $1
-         WHERE pr_id = $2 AND reviewer_id=$3`,
-		newReviewer, oldReviewer.PR, oldReviewer.UserID,
+		`UPDATE pr_reviewers SET reviewer_id = $1
+         WHERE pr_id = $2 AND reviewer_id = $3`,
+		newReviewer, oldReviewer.PRId, oldReviewer.UserID,
 	)
 
+	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("pr %s not found or reviewer not assigned", oldReviewer.PRId)
 	}
 
 	return nil
@@ -307,7 +314,7 @@ func (db *DB) Reassign(ctx context.Context, oldReviewer core.ReassignReviewer, n
 func (db *DB) GetReview(ctx context.Context, userId string) (core.UserPullRequest, error) {
 	rows, err := db.conn.QueryContext(ctx,
 		`SELECT pr.id, pr.title, pr.author_id, pr.state, pr_reviewers.reviewer_id 
-         FROM pull_requests pr 
+         FROM pull_request pr 
          JOIN pr_reviewers ON pr.id = pr_reviewers.pr_id 
          WHERE pr_reviewers.reviewer_id = $1`,
 		userId)

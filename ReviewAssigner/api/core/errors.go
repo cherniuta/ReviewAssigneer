@@ -3,7 +3,7 @@ package core
 import "errors"
 
 var (
-	ErrTeamAlreadyExists      = errors.New("team already exists")
+	ErrTeamAlreadyExists      = errors.New("team_name already exists")
 	ErrTeamNotFound           = errors.New("team not found")
 	ErrUserNotFound           = errors.New("user not found")
 	ErrPRAAlreadyExists       = errors.New("PR already exists")

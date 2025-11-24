@@ -41,6 +41,6 @@ type UserPullRequest struct {
 }
 
 type ReassignReviewer struct {
-	PR     PullRequest
+	PRId   string
 	UserID string
 }

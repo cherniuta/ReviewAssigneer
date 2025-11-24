@@ -71,10 +71,26 @@ type MergePRResponse struct {
 
 type ReassignReviewer struct {
 	PullRequestID string `json:"pull_request_id"`
-	OldReviewerID string `json:"old_reviewer_id"`
+	OldUserID     string `json:"old_user_id"`
 }
 
 type ReassignPRResponse struct {
 	PR         PRResponse `json:"pr"`
 	ReplacedBy string     `json:"replaced_by"`
+}
+
+type GetUserReviewsRequest struct {
+	UserID string `json:"user_id"`
+}
+
+type GetUserReviewsResponse struct {
+	UserID       string            `json:"user_id"`
+	PullRequests []PRShortResponse `json:"pull_requests"`
+}
+
+type PRShortResponse struct {
+	PullRequestID   string `json:"pull_request_id"`
+	PullRequestName string `json:"pull_request_name"`
+	AuthorID        string `json:"author_id"`
+	Status          string `json:"status"`
 }

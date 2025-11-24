@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	"log/slog"
@@ -24,6 +25,7 @@ func NewHandler(service *core.Service, log *slog.Logger) http.Handler {
 	router.HandleFunc("/team/add", h.CreateTeam).Methods("POST")
 	router.HandleFunc("/team/get", h.GetTeam).Methods("GET")
 	router.HandleFunc("/users/setIsActive", h.SetUserActive).Methods("POST")
+	router.HandleFunc("/users/getReview", h.GetUserReviews).Methods("GET")
 	router.HandleFunc("/pullRequest/create", h.CreatePullRequest).Methods("POST")
 	router.HandleFunc("/pullRequest/merge", h.MergePullRequest).Methods("POST")
 	router.HandleFunc("/pullRequest/reassign", h.ReassignPullRequest).Methods("POST")
@@ -68,7 +70,8 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "TEAM_EXISTS", err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		fmt.Printf("DEBUG ERROR: %v\n", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to create team")
 		return
 	}
 
@@ -248,7 +251,6 @@ func (h *Handler) MergePullRequest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
-
 func (h *Handler) ReassignPullRequest(w http.ResponseWriter, r *http.Request) {
 	var req ReassignReviewer
 
@@ -257,13 +259,17 @@ func (h *Handler) ReassignPullRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.PullRequestID == "" || req.OldReviewerID == "" {
-		writeError(w, http.StatusBadRequest, "MISSING_FIELDS", "pull_request_id and old_reviewer_id are required")
+	if req.PullRequestID == "" || req.OldUserID == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_FIELDS", "pull_request_id and old_user_id are required")
 		return
 	}
 
-	// Переназначаем ревьювера через сервис
-	result, err := h.service.Reassign(r.Context(), req)
+	coreReq := core.ReassignReviewer{
+		PRId:   req.PullRequestID,
+		UserID: req.OldUserID,
+	}
+
+	result, newReviewer, err := h.service.Reassign(r.Context(), coreReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrPRNotFound):
@@ -271,23 +277,65 @@ func (h *Handler) ReassignPullRequest(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, core.ErrUserNotFound):
 			writeError(w, http.StatusNotFound, "USER_NOT_FOUND", err.Error())
 		case errors.Is(err, core.ErrPRAlreadyMerged):
-			writeError(w, http.StatusConflict, "PR_MERGED", err.Error())
+			writeError(w, http.StatusConflict, "PR_MERGED", "can not reassign on merged PR")
 		case errors.Is(err, core.ErrReviewerNotAssigned):
-			writeError(w, http.StatusConflict, "NOT_ASSIGNED", err.Error())
+			writeError(w, http.StatusConflict, "NOT_ASSIGNED", "reviewer is not assigned to this PR ")
 		case errors.Is(err, core.ErrNoReplacementCandidate):
-			writeError(w, http.StatusConflict, "NO_CANDIDATE", err.Error())
+			writeError(w, http.StatusConflict, "NO_CANDIDATE", "no active replacement candidate in team")
 		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			// Используем единообразную функцию для ошибок
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error")
 		}
 		return
 	}
 
 	response := ReassignPRResponse{
-		PR:         toPRResponse(result.PR),
-		ReplacedBy: result.NewReviewerID,
+		PR:         toPRResponse(result),
+		ReplacedBy: newReviewer,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handler) GetUserReviews(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_PARAMETER", "user_id parameter is required")
+		return
+	}
+
+	result, err := h.service.GetReview(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, core.ErrUserNotFound) {
+			writeError(w, http.StatusNotFound, "USER_NOT_FOUND", err.Error())
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := GetUserReviewsResponse{
+		UserID:       result.UserID,
+		PullRequests: toPRShortResponses(result.PullRequest),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func toPRShortResponses(prs []core.PullRequest) []PRShortResponse {
+	responses := make([]PRShortResponse, 0, len(prs))
+	for _, pr := range prs {
+		responses = append(responses, PRShortResponse{
+			PullRequestID:   pr.PullRequestID,
+			PullRequestName: pr.PullRequestName,
+			AuthorID:        pr.AuthorID,
+			Status:          string(pr.Status),
+		})
+
+	}
+	return responses
 }

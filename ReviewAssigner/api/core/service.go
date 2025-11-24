@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 )
 
@@ -65,7 +64,7 @@ func (s *Service) CreatePR(ctx context.Context, pullRequest PullRequest) (PullRe
 	var reviewers []string
 
 	for _, teamMember := range team.Members {
-		if teamMember.IsActive {
+		if teamMember.IsActive && teamMember.UserID != pullRequest.AuthorID {
 			reviewers = append(reviewers, teamMember.UserID)
 		}
 		if len(reviewers) == 2 {
@@ -73,7 +72,7 @@ func (s *Service) CreatePR(ctx context.Context, pullRequest PullRequest) (PullRe
 		}
 	}
 	if len(reviewers) == 0 {
-		return PullRequest{}, fmt.Errorf("no active reviewers found in team '%s'", user.TeamName)
+		return PullRequest{}, ErrNotEnoughReviewers
 	}
 
 	pullRequest.AssignedReviewers = reviewers
@@ -99,7 +98,7 @@ func (s *Service) Merged(ctx context.Context, prId string) (PullRequest, error) 
 	}
 
 	if pullRequest.Status == "MERGED" {
-		return PullRequest{}, fmt.Errorf("pull request %s is already merged", prId)
+		return PullRequest{}, ErrPRAlreadyMerged
 	}
 
 	pullRequest, err = s.db.Merged(ctx, prId)
@@ -110,19 +109,23 @@ func (s *Service) Merged(ctx context.Context, prId string) (PullRequest, error) 
 	return pullRequest, nil
 }
 
-func (s *Service) Reassign(ctx context.Context, reassignReviewer ReassignReviewer) (ReassignReviewer, error) {
+func (s *Service) Reassign(ctx context.Context, reassignReviewer ReassignReviewer) (PullRequest, string, error) {
 	s.log.Info("reassigning pull request reviewer",
 		"reviewer_id", reassignReviewer.UserID,
-		"pull_request_id", reassignReviewer.PR.PullRequestID)
+		"pull_request_id", reassignReviewer.PRId)
 
-	pullRequest, err := s.db.GetPRDetailsWithReviewers(ctx, reassignReviewer.PR.PullRequestID)
+	pullRequest, err := s.db.GetPRDetailsWithReviewers(ctx, reassignReviewer.PRId)
 	if err != nil {
-		return ReassignReviewer{}, err
+		return PullRequest{}, "", err
+	}
+
+	if pullRequest.Status == "MERGED" {
+		return PullRequest{}, "", ErrPRAlreadyMerged
 	}
 
 	user, err := s.db.GetUser(ctx, reassignReviewer.UserID)
 	if err != nil {
-		return ReassignReviewer{}, err
+		return PullRequest{}, "", err
 	}
 
 	isReviewer := false
@@ -134,21 +137,19 @@ func (s *Service) Reassign(ctx context.Context, reassignReviewer ReassignReviewe
 	}
 
 	if !isReviewer {
-		return ReassignReviewer{}, fmt.Errorf("user %s is not assigned as reviewer for pull request %s",
-			reassignReviewer.UserID, reassignReviewer.PR.PullRequestID)
+		return PullRequest{}, "", ErrReviewerNotAssigned
 	}
 
 	team, err := s.db.GetTeam(ctx, user.TeamName)
 	if err != nil {
-		return ReassignReviewer{}, err
+		return PullRequest{}, "", err
 	}
 
 	var availableReviewer string
 	found := false
 
 	for _, teamMember := range team.Members {
-		if teamMember.IsActive && teamMember.UserID != user.UserID {
-			// Проверяем, что этот член команды еще не ревьювер
+		if teamMember.IsActive && teamMember.UserID != user.UserID && teamMember.UserID != pullRequest.AuthorID {
 			isAlreadyReviewer := false
 			for _, reviewer := range pullRequest.AssignedReviewers {
 				if reviewer == teamMember.UserID {
@@ -160,27 +161,30 @@ func (s *Service) Reassign(ctx context.Context, reassignReviewer ReassignReviewe
 			if !isAlreadyReviewer {
 				found = true
 				availableReviewer = teamMember.UserID
-				break // 5. Берем первого подходящего
+				break
 			}
 		}
 	}
 	if !found {
-		return ReassignReviewer{}, fmt.Errorf("no available active team member {pr_id}", reassignReviewer.PR.PullRequestID)
+		return PullRequest{}, "", ErrNoReplacementCandidate
 	}
 
 	err = s.db.Reassign(ctx, reassignReviewer, availableReviewer)
 	if err != nil {
-		return ReassignReviewer{}, err
+		return PullRequest{}, "", err
 	}
-	updatedReviewer := reassignReviewer
-	updatedReviewer.UserID = availableReviewer
+
+	updatedPR, err := s.db.GetPRDetailsWithReviewers(ctx, reassignReviewer.PRId)
+	if err != nil {
+		return PullRequest{}, "", err
+	}
 
 	s.log.Info("successfully reassigned reviewer",
 		"old_reviewer", reassignReviewer.UserID,
 		"new_reviewer", availableReviewer,
-		"pr_id", reassignReviewer.PR.PullRequestID)
+		"pr_id", reassignReviewer.PRId)
 
-	return updatedReviewer, err
+	return updatedPR, availableReviewer, err
 
 }
 

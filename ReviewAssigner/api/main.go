@@ -53,7 +53,6 @@ func main() {
 		return
 	}
 
-	// Инициализация HTTP сервера
 	handler := rest.NewHandler(service, log)
 	server := &http.Server{
 		Addr:    cfg.HTTPConfig.Address,
