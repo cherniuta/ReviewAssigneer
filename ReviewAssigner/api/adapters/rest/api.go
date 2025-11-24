@@ -29,6 +29,7 @@ func NewHandler(service *core.Service, log *slog.Logger) http.Handler {
 	router.HandleFunc("/pullRequest/create", h.CreatePullRequest).Methods("POST")
 	router.HandleFunc("/pullRequest/merge", h.MergePullRequest).Methods("POST")
 	router.HandleFunc("/pullRequest/reassign", h.ReassignPullRequest).Methods("POST")
+	router.HandleFunc("/stats", h.GetStats).Methods("GET")
 
 	return router
 }
@@ -338,4 +339,18 @@ func toPRShortResponses(prs []core.PullRequest) []PRShortResponse {
 
 	}
 	return responses
+}
+
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.service.GetStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "STATS_ERROR", "Failed to get statistics")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"stats": stats,
+	})
 }

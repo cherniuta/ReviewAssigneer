@@ -204,3 +204,28 @@ func (s *Service) GetReview(ctx context.Context, userId string) (UserPullRequest
 	return userPullRequest, nil
 
 }
+
+func (s *Service) GetStats(ctx context.Context) (Stats, error) {
+	userStats, err := s.db.GetUserReviewStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	prStats, err := s.db.GetPRReviewerCountStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	totalAssignments := 0
+	for _, count := range userStats {
+		totalAssignments += count
+	}
+
+	return Stats{
+		"user_assignments":              userStats,
+		"pr_reviewer_counts":            prStats,
+		"total_assignments":             totalAssignments,
+		"unique_users_with_assignments": len(userStats),
+		"unique_prs_with_reviewers":     len(prStats),
+	}, nil
+}

@@ -26,4 +26,6 @@ type DB interface {
 	Reassign(context.Context, ReassignReviewer, string) error
 	GetPRDetailsWithReviewers(context.Context, string) (PullRequest, error)
 	GetReview(context.Context, string) (UserPullRequest, error)
+	GetUserReviewStats(context.Context) (map[string]int, error)
+	GetPRReviewerCountStats(context.Context) (map[string]int, error)
 }

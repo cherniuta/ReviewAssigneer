@@ -44,3 +44,5 @@ type ReassignReviewer struct {
 	PRId   string
 	UserID string
 }
+
+type Stats map[string]interface{}

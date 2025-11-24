@@ -357,3 +357,55 @@ func (db *DB) GetReview(ctx context.Context, userId string) (core.UserPullReques
 
 	return userPullRequest, nil
 }
+
+func (db *DB) GetUserReviewStats(ctx context.Context) (map[string]int, error) {
+	stats := make(map[string]int)
+
+	rows, err := db.conn.QueryContext(ctx, `
+        SELECT reviewer_id, COUNT(*) as assignment_count 
+        FROM pr_reviewers 
+        GROUP BY reviewer_id
+        ORDER BY assignment_count DESC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID string
+		var count int
+		if err := rows.Scan(&userID, &count); err != nil {
+			return nil, err
+		}
+		stats[userID] = count
+	}
+
+	return stats, nil
+}
+
+func (db *DB) GetPRReviewerCountStats(ctx context.Context) (map[string]int, error) {
+	stats := make(map[string]int)
+
+	rows, err := db.conn.QueryContext(ctx, `
+        SELECT pr_id, COUNT(*) as reviewer_count 
+        FROM pr_reviewers 
+        GROUP BY pr_id
+        ORDER BY reviewer_count DESC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var prID string
+		var count int
+		if err := rows.Scan(&prID, &count); err != nil {
+			return nil, err
+		}
+		stats[prID] = count
+	}
+
+	return stats, nil
+}
